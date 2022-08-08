@@ -5,8 +5,10 @@ import pandas as pd
 import numpy as np
 import requests
 from requests.exceptions import ProxyError,HTTPError,ConnectTimeout
+from requests.adapters import HTTPAdapter
 import time
 import json
+from urllib3 import Retry
 
 
 class idealista_scraper:
@@ -27,7 +29,7 @@ class idealista_scraper:
             "TE": "trailers"
         }
         self.proxies = []
-        self.scraping_explicit_wait_time = 5
+        self.scraping_explicit_wait_time = 60
         self.IDEALISTA_HOSTNAME = 'https://www.idealista.com'
 
     def get_free_proxies(self) -> None:
@@ -63,6 +65,9 @@ class idealista_scraper:
         No arguments
 
         '''
+        
+        wait_for = self.scraping_explicit_wait_time*np.random.rand()
+        print(f'waiting for {wait_for} seconds')
         time.sleep(self.scraping_explicit_wait_time*np.random.rand())
 
     def proxy_requests(self, url:str, timeout:int=5) -> requests.models.Response:
@@ -80,7 +85,14 @@ class idealista_scraper:
 
         '''
         # First try with real IP
-        response = requests.get(url,headers=self.headers)
+        session = requests.Session()
+        retry = Retry(connect=3, backoff_factor=0.5)
+        adapter = HTTPAdapter(max_retries=retry)
+        session.mount('http://', adapter)
+        session.mount('https://', adapter)
+
+        response = session.get(url,headers=self.headers)
+
         if response.status_code == 200:
             return response
         
@@ -98,7 +110,7 @@ class idealista_scraper:
             }
 
             try:
-                response = requests.get(url, headers=self.headers, proxies=dict_proxy, timeout=timeout)
+                response = session.get(url, headers=self.headers, proxies=dict_proxy, timeout=timeout)
                 response.raise_for_status()
                 return response
             except ProxyError:
@@ -151,8 +163,8 @@ class idealista_scraper:
         for area,total_houses in more_than_1800_houses:
             self.wait_time()
             area_url = self.IDEALISTA_HOSTNAME+area.get('href')
-            print(f'recursion over: {area_url.geturl()}')
-            areas = self.links_from_breadcrumb(area_url.geturl())
+            print(f'recursion over: {area_url}')
+            areas = self.links_from_breadcrumb(area_url)
             ready_for_scraping.extend(areas)
         
         
@@ -176,7 +188,6 @@ class idealista_scraper:
         self.areas_df['page'] = 1
         self.areas_df['done'] = False
 
-        
     def generate_houses_df(self) -> None:
         '''
         Has to be run after get_areas_df as it needs areas_df to work.
@@ -190,24 +201,30 @@ class idealista_scraper:
         if not hasattr(self,'areas_df'):
             raise 'Please run get_areas_df first'
             
+        if not hasattr(self,'house_list'):
+            self.houses_list = []
 
-        self.houses_list = []
         for area in self.areas_df[self.areas_df['done']==False].itertuples():
             path = f'{area.area_url}pagina-{str(area.page)}.htm?ordenado-por=fecha-publicacion-desc'
+            print(f'Getting properties\' url for {area.area_name}')
             
             while True:
                 response = self.proxy_requests(self.IDEALISTA_HOSTNAME+path)
+                response.raise_for_status()
                 soup = BeautifulSoup(response.text,'lxml')
                 thisPageLinks = [[area.area_name,self.IDEALISTA_HOSTNAME+x.get('href')] for x in soup.select('a.item-link')]
                 self.houses_list.extend(thisPageLinks)
+                print(f'page {area.page}: property links added')
 
                 # if there is a next page
                 next_page = soup.select_one('.pagination .next a')
-                if next_page:
+                print(f'{next_page}')
+                if bool(next_page):
                     # done with this page
                     path = self.IDEALISTA_HOSTNAME+next_page.get('href')
                     # storing next page on area_df in case this breaks
-                    self.areas_df['page'].iloc[area.index] = area.page+1
+                    self.areas_df.iloc[area.Index]['page'] = area.page+1
+                    print(f'next page: {path}, which is number {area.page+1}')
                 else:
                     # done with this area
                     break
@@ -216,7 +233,6 @@ class idealista_scraper:
 
             self.areas_df['done'].iloc[area.index] = True
         
-    
     def get_houses_data(self) -> pd.DataFrame:
         '''
 
@@ -230,10 +246,12 @@ class idealista_scraper:
             response = self.proxy_requests(link)
             soup = BeautifulSoup(response,'lxml')
             
-            utag_script = [x for x in soup.select('script') if 'utag_data' in x.get_text()]
+            utag_script = list(filter(lambda x: 'utag_data' in x.get_text(),soup.select('script')))
             utag_data = json.loads(str(utag_script[0]).split(';')[0].split(' ')[7])
             house_data = {
                 'id':utag_data['ad']['id'],
+                'propertyType':soup.select_one('.main-info .typology').text.strip().lower(),
+                'title':soup.select_one('.main-info .txt-body').text.strip().lower(),
                 'area':area_name,
                 'link':link,
                 'price':utag_data['ad']['price'],
@@ -241,14 +259,22 @@ class idealista_scraper:
                 'hasParking':utag_data['ad']['characteristics'].get('hasParking',0), # if does not exist, get 0
                 'roomNumber':utag_data['ad']['characteristics']['roomNumber'],
                 'bathNumber':utag_data['ad']['characteristics']['bathNumber'],
+                'heatingType': list(filter(lambda x: 'calefacción' in x.text.lower(),soup.select('.details-property_features li')))[0],
                 'hasSwimmingPool':utag_data['ad']['characteristics'].get('hasSwimmingPool',0), # if does not exist, get 0
                 'hasTerrace':utag_data['ad']['characteristics'].get('hasTerrace',0), # if does not exist, get 0
                 'hasGarden':utag_data['ad']['characteristics'].get('hasGarden',0), # if does not exist, get 0
                 'hasLift':utag_data['ad']['characteristics'].get('hasLift',0), # if does not exist, get 0
                 'isGoodCondition':utag_data['ad']['condition']['isGoodCondition'],
                 'isNeedsRenovating':utag_data['ad']['condition']['isNeedsRenovating'],
-                'isNewDevelopment':utag_data['ad']['condition']['isNewDevelopment']
+                'isNewDevelopment':utag_data['ad']['condition']['isNewDevelopment'],
+                'featureTags': [x.get_text() for x in soup.select('info-features-tags')]
             }
+
+            if house_data['propertyType'] == 'piso':
+                house_data['floor'] = soup.select('.info-features > span')[2].select_one('span').text.strip().lower() or "no info"
+            else:
+                house_data['floor'] = "does not apply"
+
             
             if hasattr(self,'dataset'):
                 self.dataset = self.dataset.append(house_data, ignore_index=True)
@@ -259,29 +285,20 @@ class idealista_scraper:
 
             print(f'Property {self.houses_list.index([area_name,link])+1} of {len(self.houses_list)}')
 
-
     def scrape(self, starting_url:str) -> None:
         self.get_areas_df(starting_url)
         
         print('Found '+self.areas_df['n_houses'].sum()+' houses')
 
-        self.generate_houses_list()
+        self.generate_houses_df()
 
-
-        
-
-
-
-
+        self.get_houses_data()
 
 
 scraper = idealista_scraper()
 
 url = 'https://www.idealista.com/venta-viviendas/madrid-madrid/'
 
-areas_list = scraper.get_areas_list(url)
+scraper.get_areas_df(url)
 
-
-
-
-
+scraper.generate_houses_df()
