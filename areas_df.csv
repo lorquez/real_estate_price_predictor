@@ -15,16 +15,16 @@ Palacio,/venta-viviendas/madrid/centro/palacio/,415,2,True
 Usera,/venta-viviendas/madrid/usera/,540,2,True
 Goya,/venta-viviendas/madrid/barrio-de-salamanca/goya/,553,2,True
 Villaverde,/venta-viviendas/madrid/villaverde/,582,2,True
-Lavapiés-Embajadores,/venta-viviendas/madrid/centro/lavapies-embajadores/,593,1,False
-Arganzuela,/venta-viviendas/madrid/arganzuela/,676,1,False
-Retiro,/venta-viviendas/madrid/retiro/,685,1,False
-Malasaña-Universidad,/venta-viviendas/madrid/centro/malasana-universidad/,724,1,False
-San Blas,/venta-viviendas/madrid/san-blas/,773,1,False
-Latina,/venta-viviendas/madrid/latina/,812,1,False
-Fuencarral,/venta-viviendas/madrid/fuencarral/,867,1,False
-Hortaleza,/venta-viviendas/madrid/hortaleza/,870,1,False
-Moncloa,/venta-viviendas/madrid/moncloa/,999,1,False
-Puente de Vallecas,/venta-viviendas/madrid/puente-de-vallecas/,1162,1,False
+Lavapiés-Embajadores,/venta-viviendas/madrid/centro/lavapies-embajadores/,593,20,True
+Arganzuela,/venta-viviendas/madrid/arganzuela/,676,23,True
+Retiro,/venta-viviendas/madrid/retiro/,685,23,True
+Malasaña-Universidad,/venta-viviendas/madrid/centro/malasana-universidad/,724,25,True
+San Blas,/venta-viviendas/madrid/san-blas/,773,26,True
+Latina,/venta-viviendas/madrid/latina/,812,27,True
+Fuencarral,/venta-viviendas/madrid/fuencarral/,867,30,True
+Hortaleza,/venta-viviendas/madrid/hortaleza/,870,30,True
+Moncloa,/venta-viviendas/madrid/moncloa/,999,34,True
+Puente de Vallecas,/venta-viviendas/madrid/puente-de-vallecas/,1162,7,False
 Chamartín,/venta-viviendas/madrid/chamartin/,1190,1,False
 Tetuán,/venta-viviendas/madrid/tetuan/,1235,1,False
 Ciudad Lineal,/venta-viviendas/madrid/ciudad-lineal/,1323,1,False
