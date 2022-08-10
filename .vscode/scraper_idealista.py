@@ -1,14 +1,11 @@
-from latest_user_agents import get_random_user_agent
-from urllib.parse import urlsplit
 from bs4 import BeautifulSoup
+from latest_user_agents import get_random_user_agent
 import pandas as pd
 import numpy as np
 import requests
-from requests.exceptions import ProxyError,HTTPError,ConnectTimeout
-from requests.adapters import HTTPAdapter
+from requests.exceptions import ProxyError,HTTPError,ConnectTimeout,ConnectionError
 import time
 import json
-from urllib3 import Retry
 
 
 class idealista_scraper:
@@ -28,27 +25,43 @@ class idealista_scraper:
             "Sec-Fetch-User": "?1",
             "TE": "trailers"
         }
-        self.proxies = []
         self.scraping_var_wait_time = 10 # this will be multiplied for a random percentage
         self.scraping_fix_wait_time = 5 # this will be added to wait time as is
         self.IDEALISTA_HOSTNAME = 'https://www.idealista.com'
 
+    def reset_headers(self) -> None:
+
+        self.headers = {
+            "Host": "www.idealista.com",
+            "User-Agent": "Mozilla/5.0 (X11; Linux x86_64; rv:102.0) Gecko/20100101 Firefox/102.0",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.5",
+            "Accept-Encoding": "gzip, deflate, br",
+            "Connection": "keep-alive",
+            "Upgrade-Insecure-Requests": "1",
+            "Sec-Fetch-Dest": "document",
+            "Sec-Fetch-Mode": "navigate",
+            "Sec-Fetch-Site": "none",
+            "Sec-Fetch-User": "?1",
+            "TE": "trailers"
+        }
+    
     def get_free_proxies(self) -> None:
         '''
         This function scrapes the free-proxy-list.net website looking for
-        free proxies.
+        free proxies and puts them in a class property called "proxies"
+        as a list.
 
         Args:
         - headers: the user agent needed to avoid 403 error when accessing the free-proxy-list.net website
 
-        Returns: a pandas dataframe with the free proxies' table
         '''
         endpoint = 'https://api.proxyscrape.com/v2/'
         params = {
             'request':'displayproxies',
             'protocol':'http',
             'timeout':10000,
-            'country':'gb,es,pt,it,fr,de,nl', # or all
+            'country':'all', # or gb,es,pt,it,fr,de,nl
             'ssl':'all',
             'anonymity':'all'
         }
@@ -56,6 +69,7 @@ class idealista_scraper:
         response = requests.get(endpoint,params=params)
         
         self.proxies = response.text.split('\r\n')[:-1]
+        print(f'found {len(self.proxies)} proxies')
 
     def wait_time(self) -> None:
         '''
@@ -88,18 +102,24 @@ class idealista_scraper:
         Returns: the request's response
 
         '''
-        print('First try with real IP')
-        response = requests.get(url,headers=self.headers)
 
-        if response.status_code == 200:
-            return response
-        
-        print('Failed using real IP. Trying with proxies')
+        if not hasattr(self,"real_ip"):
+            self.real_ip = True
+
+        if self.real_ip == False: # do not retry with real IP if it failed already
+            print('First try with real IP')
+            response = requests.get(url,headers=self.headers)
+
+            if response.status_code == 200:
+                return response
+            
+            print('Failed using real IP. Trying with proxies')
+            
+            self.real_ip = False 
 
         # Rotating through proxies  
-        if len(self.proxies) == 0: 
+        if not hasattr(self,"proxies"): 
             self.get_free_proxies()
-            print(f'found {len(self.proxies)} proxies')
 
         while (self.proxies): # as long as there are proxies
             proxy = self.proxies[0]
@@ -108,7 +128,7 @@ class idealista_scraper:
                 'http':proxy,
                 'https':proxy
             }
-
+            self.headers['User-Agent'] = get_random_user_agent()
             try:
                 response = requests.get(url, headers=self.headers, proxies=dict_proxy, timeout=timeout)
                 response.raise_for_status()
@@ -117,15 +137,15 @@ class idealista_scraper:
                 print(f'Connection to proxy {proxy} has failed. Moving to next proxy.')
             except HTTPError:
                 print(f'Response code: {response.status_code}. Descr: {response.reason}')
-            except (TimeoutError,ConnectTimeout):
+            except:# (TimeoutError,ConnectTimeout,ConnectionError):
                 current_user_agent = self.headers['User-Agent']
                 print(f'Connection failed to {url} using proxy {proxy} and user_agent {current_user_agent}')
             
             # if the proxy does not work, removes it
             self.proxies.remove(proxy)
             print(f'{len(self.proxies)} proxies left')
-            #user_agent = get_random_user_agent()
-            #self.headers['User-Agent'] = user_agent
+
+        del self.proxies
 
         return response
 
@@ -194,7 +214,7 @@ class idealista_scraper:
         It iterates through each area stored in areas_df DataFrame, and extract
         houses' links from each page of the area (district or subdistrict)
 
-        It creates a new class property "houses_list"
+        It creates a new class property "properties_links_df"
 
         '''
 
@@ -206,7 +226,7 @@ class idealista_scraper:
                 raise 'Please run get_areas_df first'
             
             print('areas_df found.')
-            
+        
         
         for area in self.areas_df[self.areas_df['done']==False].itertuples():
             path = f'{self.IDEALISTA_HOSTNAME}{area.area_url}pagina-{str(area.page)}.htm?ordenado-por=fecha-publicacion-asc'
@@ -220,20 +240,26 @@ class idealista_scraper:
                     raise f"Cannot retrieve data for page {page} of {area.area_name}"
                 soup = BeautifulSoup(response.text,'lxml')
                 
+                # extracting links from page and creating a 3 columns df
                 thisPageLinks = [[area.area_name,self.IDEALISTA_HOSTNAME+x.get('href'),False] for x in soup.select('a.item-link')]
                 thisPageLinks_df = pd.DataFrame(thisPageLinks, columns=['area_name','property_link','done'])
-                if hasattr(self,'properties_links_df'):
-                    self.properties_links_df.append(thisPageLinks_df)
-                else:
-                    self.properties_links_df = thisPageLinks_df.copy()
-                thisPageLinks_df.to_csv('./properties_links_df.csv',mode='a',index=False)
 
-                print(f'Page {area.page}: property links added')
-                print(f'houses_list now has {len(self.houses_list)} links')
+                # create or concat data to properties_links_df
+                if hasattr(self,'properties_links_df'):
+                    self.properties_links_df = pd.concat([self.properties_links_df, thisPageLinks_df])
+                else:
+                    try:
+                        self.properties_links_df = pd.concat(pd.read_csv('./properties_links_df.csv'),thisPageLinks_df)
+                    except:
+                        self.properties_links_df = thisPageLinks_df.copy()
+                
+                thisPageLinks_df.to_csv('./properties_links_df.csv', mode='a', index=False, header=False)
+
+                print(f'Page {page}: property links added')
+                print(f'properties_links_df now has {len(self.properties_links_df)} links')
 
                 # if there is a next page
                 next_page = soup.select_one('.pagination .next a')
-                print(f'{next_page}')
                 if bool(next_page):
                     # done with this page
                     self.headers['Referrer'] = path
@@ -246,6 +272,7 @@ class idealista_scraper:
                 else:
                     # done with this area
                     self.areas_df.at[area.Index,"done"] = True
+                    print(f'all properties\' links from {area.area_name} have been extracted')
                     break
                 
                 self.wait_time()
@@ -309,18 +336,23 @@ class idealista_scraper:
 
             property_data_df = pd.DataFrame(property_data, index=0)
             
+            # create or concat data to idealista_dataset
             if hasattr(self,'dataset'):
-                self.dataset = self.dataset.append(property_data_df)
+                self.dataset = pd.concat([self.dataset, property_data_df])
             else:
-                self.dataset = pd.DataFrame(property_data_df)
+                try:
+                    self.dataset = pd.concat(pd.read_csv('./idealista_dataset.csv'), property_data_df)
+                except:
+                    self.dataset = property_data_df.copy()
 
-            property_data_df.to_csv('idealista_dataset.csv',mode='a',index=False)
+            property_data_df.to_csv('idealista_dataset.csv', mode='a', index=False, header=False)
 
             self.properties_links_df.at[row.Index,'done'] = True
 
+
             print(f'Property {row.Index+1} of {len(self.properties_links_df.shape[0])}')
 
-    def scrape(self, starting_url:str) -> None:
+    def full_scrape(self, starting_url:str) -> None:
         self.get_areas_df(starting_url)
         
         print('Found '+self.areas_df['n_houses'].sum()+' houses')
@@ -337,11 +369,26 @@ scraper = idealista_scraper()
 
 url = 'https://www.idealista.com/venta-viviendas/madrid-madrid/'
 
-scraper.scrape(url)
+scraper.generate_properties_links_df()
+
+
+
+
+scraper.full_scrape(url)
+
+idealista_dataset = scraper.dataset.copy()
 
 r = requests.get('https://www.idealista.com/venta-viviendas/madrid-madrid/mapa',headers=scraper.headers)
 soup = BeautifulSoup(r,"html.parser")
 location_id_mapper = [{x.get('data-location-id'):x.find('a').text} for x in soup.select('.breadcrumb-dropdown-subitem-element-list')]
 
-scraper.dataset['area'] = scraper.dataset['area'].apply(lambda x: "-".join(x.split("-")[:8]))
-scraper.dataset['area'] = scraper.dataset['area'].map(location_id_mapper)
+idealista_dataset['area'] = idealista_dataset['area'].apply(lambda x: "-".join(x.split("-")[:8]))
+idealista_dataset['area'] = idealista_dataset['area'].map(location_id_mapper)
+idealista_dataset['price_m2'] = idealista_dataset['price'] / idealista_dataset['size']
+
+# Idealista often suffer of fraudolent announces so i aggregate 
+# the price_m2 per area using median as it is more robust than mean
+price_m2_per_area = idealista_dataset[['area','price_m2']].groupby(['area']).median().reset_index()
+price_m2_per_area = [{key:value} for key,value in price_m2_per_area.values]
+
+idealista_dataset['area_price'] = idealista_dataset['area'].map(price_m2_per_area).astype(float)
