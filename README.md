@@ -1,2 +1,2 @@
-# Kschool_Master_en_Data_Science_tfm
+# Real estate price predictor
 Final data science project for the Kschool Master in Data Science
