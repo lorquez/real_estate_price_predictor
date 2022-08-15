@@ -451,6 +451,8 @@ class idealista_scraper:
 url = 'https://www.idealista.com/venta-viviendas/madrid-madrid/'
 scraper = idealista_scraper(url)
 
+scraper.get_properties_data()
+
 scraper.full_scrape()
 
 idealista_dataset = scraper.dataset.copy()
