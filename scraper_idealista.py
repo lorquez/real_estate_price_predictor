@@ -8,13 +8,13 @@ import time
 import json
 import os
 
-
 class idealista_scraper:
 
-    def __init__(self) -> None:
+    def __init__(self, url:str) -> None:
         self._scraping_var_wait_time = 10 # this will be multiplied for a random percentage
         self._scraping_fix_wait_time = 5 # this will be added to wait time as is
         self._IDEALISTA_HOSTNAME = 'https://www.idealista.com'
+        self._url = url
         self.reset_headers()
 
     def reset_headers(self) -> None:
@@ -113,7 +113,17 @@ class idealista_scraper:
         print(f'waiting for {wait_for} seconds')
         time.sleep(wait_for)
 
-    def proxy_requests(self, url:str, timeout:int=5) -> requests.models.Response:
+    def _proxy_requests_api(self, url:str) -> str:
+
+        endpoint = ' https://api.scraperapi.com'
+        params = {
+          'api_key':'b07852a87a699b4a8284c62bc639547b',
+          'url':url
+        }
+        response = requests.get(endpoint, params=params)
+        return response
+
+    def _proxy_requests(self, url:str, timeout:int=5) -> requests.models.Response:
         '''
         Wrapper for the requests.get funcion. It runs the _get_free_proxies function
         and rotates through each proxy to complete the request. The proxy list is saved
@@ -121,7 +131,6 @@ class idealista_scraper:
         removes that proxy from the proxies' list.
 
         Args:
-        - url (str): the url for the request
         - timeout (int): how many seconds to wait before throwing TimeoutError (default: 5)
 
         Returns: the request's response
@@ -187,7 +196,7 @@ class idealista_scraper:
         
 
         print(f'starting from {thisUrl}')
-        response = self.proxy_requests(thisUrl)
+        response = self._proxy_requests(thisUrl)
         soup = BeautifulSoup(response.text,'lxml')
         
         current_level_links = [x for x in soup.select('li.breadcrumb-dropdown-element.highlighted a')]
@@ -212,19 +221,16 @@ class idealista_scraper:
         
         return ready_for_scraping
 
-    def get_areas_df(self, url:str) -> None:
+    def get_areas_df(self) -> None:
         '''
         Has to be run first. It creates a urls list for each area
         that can be found as a subarea of the url given as input.
 
-        Args:
-        url (str): the url of main area to look into
-
-        Writes a new class property named "areas_df" (pandas DataFrame)
+                Writes a new class property named "areas_df" (pandas DataFrame)
 
         '''
 
-        areas_list = [[x[0].text,x[0].get('href'),x[1]] for x in self._links_from_breadcrumb(url)]
+        areas_list = [[x[0].text,x[0].get('href'),x[1]] for x in self._links_from_breadcrumb(self._url)]
         self.areas_df = pd.DataFrame(areas_list, columns=['area_name','area_url','n_houses']).sort_values(by='n_houses')
         self.areas_df = self.areas_df.reset_index().drop('index',axis=1)
         self.areas_df['page'] = 1
@@ -258,7 +264,7 @@ class idealista_scraper:
 
             while True:
                 print(f'Path is {path}')
-                response = self.proxy_requests(path)
+                response = self._proxy_requests(path)
                 if response.status_code != 200:
                     raise f"Cannot retrieve data for page {page} of {area.area_name}"
                 soup = BeautifulSoup(response.text,'lxml')
@@ -319,72 +325,116 @@ class idealista_scraper:
 
         print(f'Properties\' links found: {self.properties_links_df.shape[0]}.')
 
-
         for row in self.properties_links_df[self.properties_links_df['done']==False].itertuples():
-            print(row)
-            response = self.proxy_requests(row.property_link)
-            if response.status_code == 404:
-                print(f'Property not found {row.property_link}')
-                continue
-            
-            response.raise_for_status()
+            self._get_single_property_data(row)
 
-            soup = BeautifulSoup(response.text,'html.parser')
-            
-            print(f'Soup parsed for {row.property_link}')
+    def _get_single_property_data(self,row) -> None:
+        print(row)
+        response = self._proxy_requests_api(row.property_link)
+        if response.status_code == 404:
+            print(f'Property not found {row.property_link}')
+            return pd.DataFrame()
+        
 
+        soup = BeautifulSoup(response.text,'html.parser')
+        
+        print(f'Soup parsed for {row.property_link}')
+
+        if soup.select('#notFoundWithSuggestions'):
+            print(f'This property has been removed')
+            self.properties_links_df = self.properties_links_df.drop(row.Index)
+            self.properties_links_df.to_csv('./properties_links_df.csv',index=False)
+            return pd.DataFrame()
+        
+        try:
             utag_script = list(filter(lambda x: 'utag_data' in x.get_text(),soup.select('script')))[0]
             utag_data = json.loads(str(utag_script).split(';')[0].split(' ')[7])
-            property_data = {
-                'id':utag_data['ad']['id'],
-                'propertyType':soup.select_one('.main-info .typology').text.strip().lower(),
-                'title':soup.select_one('.main-info .txt-body').text.strip().lower(),
-                'area':utag_data['ad']['address']['locationId'],
-                'link':row.property_link,
-                'price':utag_data['ad']['price'],
-                'size':utag_data['ad']['characteristics']['constructedArea'],
-                'hasParking':utag_data['ad']['characteristics'].get('hasParking',0), # if does not exist, get 0
-                'roomNumber':utag_data['ad']['characteristics']['roomNumber'],
-                'bathNumber':utag_data['ad']['characteristics']['bathNumber'],
-                'heatingType': list(filter(lambda x: 'calefacción' in x.get_text().lower(),soup.select('.details-property_features li')))[0],
-                'hasSwimmingPool':utag_data['ad']['characteristics'].get('hasSwimmingPool',0), # if does not exist, get 0
-                'hasTerrace':utag_data['ad']['characteristics'].get('hasTerrace',0), # if does not exist, get 0
-                'hasGarden':utag_data['ad']['characteristics'].get('hasGarden',0), # if does not exist, get 0
-                'hasLift':utag_data['ad']['characteristics'].get('hasLift',0), # if does not exist, get 0
-                'isGoodCondition':utag_data['ad']['condition']['isGoodCondition'],
-                'isNeedsRenovating':utag_data['ad']['condition']['isNeedsRenovating'],
-                'isNewDevelopment':utag_data['ad']['condition']['isNewDevelopment'],
-                'featureTags': [x.get_text() for x in soup.select('info-features-tags')]
-            }
+        except:
+            print(f'Cannot retrieve data for {row.property_link}')
+            return pd.DataFrame()
+        property_data = {
+            'id':utag_data['ad']['id'],
+            'propertyType':soup.select_one('.main-info .typology').text.strip().lower(),
+            'title':soup.select_one('.main-info .txt-body').text.strip().lower(),
+            'locationId':utag_data['ad']['address']['locationId'],
+            'link':row.property_link,
+            'price':utag_data['ad']['price'],
+            'size':utag_data['ad']['characteristics']['constructedArea'],
+            'hasParking':utag_data['ad']['characteristics'].get('hasParking',0), # if not exist, get 0
+            'roomNumber':utag_data['ad']['characteristics']['roomNumber'],
+            'bathNumber':utag_data['ad']['characteristics']['bathNumber'],
+            'hasSwimmingPool':utag_data['ad']['characteristics'].get('hasSwimmingPool',0), # if not exist, get 0
+            'hasTerrace':utag_data['ad']['characteristics'].get('hasTerrace',0), # if not exist, get 0
+            'hasGarden':utag_data['ad']['characteristics'].get('hasGarden',0), # if not exist, get 0
+            'hasLift':utag_data['ad']['characteristics'].get('hasLift',0), # if not exist, get 0
+            'isGoodCondition':utag_data['ad']['condition']['isGoodCondition'],
+            'isNeedsRenovating':utag_data['ad']['condition']['isNeedsRenovating'],
+            'isNewDevelopment':utag_data['ad']['condition']['isNewDevelopment'],
+            'featureTags': [x.get_text() for x in soup.select('info-features-tags')]
+        }
 
-            if property_data['propertyType'] == 'piso':
-                property_data['floor'] = soup.select('.info-features > span')[2].select_one('span').text.strip().lower() or "no info"
+        heatingData = list(filter(lambda x: 'calefacción' in x.get_text().lower(),soup.select('.details-property_features li')))
+        if heatingData:
+            property_data['heatingType'] = heatingData[0]
+        else:
+            property_data['heatingType'] = "no info"
+
+        if property_data['propertyType'] == 'piso':
+            info_features = soup.select('.info-features > span')
+            if [x for x in info_features if "interior" in x.get_text()]:
+                property_data['interiorExterior'] = "interior"
+            elif [x for x in info_features if "exterior" in x.get_text()]:
+                property_data['interiorExterior'] = "exterior"
             else:
-                property_data['floor'] = "does not apply"
-            
-            property_data_df = pd.DataFrame.from_dict(property_data,orient='index').T
-            print(f'Data converted to DF for {row.property_link}')
-            
-            # create or concat data to idealista_dataset
-            if hasattr(self,'dataset'):
-                self.dataset = pd.concat([self.dataset, property_data_df])
+                property_data['interiorExterior'] = "no info"
+            floor_info = [x for x in info_features if re.search("bajo|sotano|planta", x.get_text().lower())]
+            if floor_info:
+                property_data['floor'] = floor_info[0].select_one('span').get_text().lower().strip()
             else:
-                try:
-                    self.dataset = pd.concat(pd.read_csv('./idealista_dataset.csv'), property_data_df)
-                except:
-                    self.dataset = property_data_df.copy()
+                property_data['floor'] = "no info"
+        else:
+            property_data['floor'] = property_data['interiorExterior'] = "does not apply"
+        
+        property_data_df = pd.DataFrame.from_dict(property_data,orient='index').T
+        print(f'Data converted to DF for {row.property_link}')
+            
+        # create or concat data to idealista_dataset
+        if hasattr(self,'dataset'):
+            self.dataset = pd.concat([self.dataset, property_data_df])
+        else:
+            try:
+                self.dataset = pd.concat(pd.read_csv('./idealista_dataset.csv'), property_data_df)
+            except:
+                self.dataset = property_data_df.copy()
 
-            header = not os.path.exists('./idealista_dataset.csv')
-            property_data_df.to_csv('./idealista_dataset.csv', mode='a', index=False, header=header)
+        header = not os.path.exists('./idealista_dataset.csv')
+        property_data_df.to_csv('./idealista_dataset.csv', mode='a', index=False, header=header)
 
 
-            self.properties_links_df.at[row.Index,'done'] = True
-            self.properties_links_df.to_csv('./properties_links_df.csv')
+        self.properties_links_df.at[row.Index,'done'] = True
+        self.properties_links_df.to_csv('./properties_links_df.csv',index=False)
 
-            print(f'Property {row.Index+1} of {self.properties_links_df.shape[0]}')
+        print(f'Property {row.Index+1} of {self.properties_links_df.shape[0]} done')
 
-    def full_scrape(self, starting_url:str) -> None:
-        self.get_areas_df(starting_url)
+    def get_location_ids_mapper(self) -> dict:
+        '''
+        By default, every record in the dataset has de feature "location id" which
+        is the website own id to identify the district. This function scrape and
+        creates a new class property named "location_ids_mapper", a dict to map 
+        location ids to district's names
+
+        '''
+        
+        response = self._proxy_requests(self._url)
+        response.raise_for_status()
+        soup = BeautifulSoup(response.text,'html.parser')
+
+        locations_list = [(x.get('data-location-id'),x.select_one('a').get_text()) for x in soup.select('.breadcrumb-dropdown-subitem-element-list')]
+
+        self.location_ids_mapper = {key:value for key,value in locations_list}
+
+    def full_scrape(self) -> None:
+        self.get_areas_df()
         
         print('Found '+self.areas_df['n_houses'].sum()+' houses')
 
@@ -394,33 +444,24 @@ class idealista_scraper:
 
         self.get_properties_data()
 
+        self.get_location_ids_mapper()
+        self.dataset['area_name'] = self.dataset['locationId'].map(self.location_ids_mapper)
 
-
-scraper = idealista_scraper()
 
 url = 'https://www.idealista.com/venta-viviendas/madrid-madrid/'
+scraper = idealista_scraper(url)
 
-scraper.generate_properties_links_df()
-
-scraper.properties_links_df = scraper.properties_links_df.drop_duplicates()
-
-scraper.get_properties_data()
-
-scraper.full_scrape(url)
+scraper.full_scrape()
 
 idealista_dataset = scraper.dataset.copy()
 
-r = requests.get('https://www.idealista.com/venta-viviendas/madrid-madrid/mapa',headers=scraper.headers)
-soup = BeautifulSoup(r,"html.parser")
-location_id_mapper = [{x.get('data-location-id'):x.find('a').text} for x in soup.select('.breadcrumb-dropdown-subitem-element-list')]
-
-idealista_dataset['area'] = idealista_dataset['area'].apply(lambda x: "-".join(x.split("-")[:8]))
-idealista_dataset['area'] = idealista_dataset['area'].map(location_id_mapper)
-idealista_dataset['price_m2'] = idealista_dataset['price'] / idealista_dataset['size']
+idealista_dataset['locationId'] = idealista_dataset['locationId'].apply(lambda x: "-".join(x.split("-")[:8]))
+idealista_dataset['area_name'] = idealista_dataset['locationId'].map(scraper.location_ids_mapper)
+idealista_dataset['price_m2'] = (idealista_dataset['price'] / idealista_dataset['size']).round(2)
 
 # Idealista often suffer from fraudolent announces so it's better to aggregate 
 # the price_m2_per_area using the median as it is more robust than the mean
-price_m2_per_area = idealista_dataset[['area','price_m2']].groupby(['area']).median().reset_index()
-price_m2_per_area = [{key:value} for key,value in price_m2_per_area.values]
+price_m2_per_area = idealista_dataset[['area_name','price_m2']].groupby(['area_name']).median().reset_index()
+price_m2_per_area = {key:value for key,value in price_m2_per_area.values}
 
-idealista_dataset['area_price'] = idealista_dataset['area'].map(price_m2_per_area).astype(float)
+idealista_dataset['area_price'] = idealista_dataset['area_name'].map(price_m2_per_area).astype(float)
