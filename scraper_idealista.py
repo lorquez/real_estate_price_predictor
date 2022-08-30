@@ -7,6 +7,7 @@ from requests.exceptions import ProxyError,HTTPError,ConnectTimeout,ConnectionEr
 import time
 import json
 import os
+import re
 
 class idealista_scraper:
 
@@ -25,7 +26,7 @@ class idealista_scraper:
 
         self._headers = {
             "Host": "www.idealista.com",
-            "User-Agent": "Mozilla/5.0 (X11; Linux x86_64; rv:102.0) Gecko/20100101 Firefox/102.0",
+            "User-Agent": "Mozilla/5.0 (X11; Linux x86_64; rv:103.0) Gecko/20100101 Firefox/103.0",
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
             "Accept-Language": "en-US,en;q=0.5",
             "Accept-Encoding": "gzip, deflate, br",
@@ -114,12 +115,14 @@ class idealista_scraper:
         time.sleep(wait_for)
 
     def _proxy_requests_api(self, url:str) -> str:
-
+        
         endpoint = ' https://api.scraperapi.com'
-        params = {
-          'api_key':'b07852a87a699b4a8284c62bc639547b',
-          'url':url
-        }
+        with open('scraping_apikey','r') as f:
+            params = {
+            'api_key':f.read(),
+            'url':url
+            }
+
         response = requests.get(endpoint, params=params)
         return response
 
@@ -330,11 +333,12 @@ class idealista_scraper:
 
     def _get_single_property_data(self,row) -> None:
         print(row)
-        response = self._proxy_requests_api(row.property_link)
+        response = self._proxy_requests(row.property_link)
         if response.status_code == 404:
             print(f'Property not found {row.property_link}')
-            return pd.DataFrame()
-        
+            self.properties_links_df = self.properties_links_df.drop(row.Index)
+            self.properties_links_df.to_csv('./properties_links_df.csv',index=False)
+            return None
 
         soup = BeautifulSoup(response.text,'html.parser')
         
@@ -344,14 +348,14 @@ class idealista_scraper:
             print(f'This property has been removed')
             self.properties_links_df = self.properties_links_df.drop(row.Index)
             self.properties_links_df.to_csv('./properties_links_df.csv',index=False)
-            return pd.DataFrame()
+            return None
         
         try:
             utag_script = list(filter(lambda x: 'utag_data' in x.get_text(),soup.select('script')))[0]
             utag_data = json.loads(str(utag_script).split(';')[0].split(' ')[7])
         except:
             print(f'Cannot retrieve data for {row.property_link}')
-            return pd.DataFrame()
+            return None
         property_data = {
             'id':utag_data['ad']['id'],
             'propertyType':soup.select_one('.main-info .typology').text.strip().lower(),
@@ -370,12 +374,12 @@ class idealista_scraper:
             'isGoodCondition':utag_data['ad']['condition']['isGoodCondition'],
             'isNeedsRenovating':utag_data['ad']['condition']['isNeedsRenovating'],
             'isNewDevelopment':utag_data['ad']['condition']['isNewDevelopment'],
-            'featureTags': [x.get_text() for x in soup.select('info-features-tags')]
+            'featureTags': [x.get_text().strip() for x in soup.select('.info-features-tags')]
         }
 
         heatingData = list(filter(lambda x: 'calefacción' in x.get_text().lower(),soup.select('.details-property_features li')))
         if heatingData:
-            property_data['heatingType'] = heatingData[0]
+            property_data['heatingType'] = heatingData[0].get_text()
         else:
             property_data['heatingType'] = "no info"
 
@@ -387,7 +391,7 @@ class idealista_scraper:
                 property_data['interiorExterior'] = "exterior"
             else:
                 property_data['interiorExterior'] = "no info"
-            floor_info = [x for x in info_features if re.search("bajo|sotano|planta", x.get_text().lower())]
+            floor_info = [x for x in info_features if re.search("bajo|sótano|planta", x.get_text().lower())]
             if floor_info:
                 property_data['floor'] = floor_info[0].select_one('span').get_text().lower().strip()
             else:
@@ -457,6 +461,8 @@ scraper.full_scrape()
 
 idealista_dataset = scraper.dataset.copy()
 
+scraper.get_location_ids_mapper()
+
 idealista_dataset['locationId'] = idealista_dataset['locationId'].apply(lambda x: "-".join(x.split("-")[:8]))
 idealista_dataset['area_name'] = idealista_dataset['locationId'].map(scraper.location_ids_mapper)
 idealista_dataset['price_m2'] = (idealista_dataset['price'] / idealista_dataset['size']).round(2)
@@ -467,3 +473,20 @@ price_m2_per_area = idealista_dataset[['area_name','price_m2']].groupby(['area_n
 price_m2_per_area = {key:value for key,value in price_m2_per_area.values}
 
 idealista_dataset['area_price'] = idealista_dataset['area_name'].map(price_m2_per_area).astype(float)
+
+
+thisUrl = 'https://www.idealista.com/inmueble/98450654/'
+scraper._headers['Referrer'] = 'https://www.idealista.com/venta-viviendas/madrid/villaverde/los-angeles/'
+r = requests.get(f'{thisUrl}',headers=scraper._headers)
+
+params = {
+  'url': 'https://ephemeral-proxies.p.rapidapi.com/v1/proxy',
+  'headers': {
+    'X-RapidAPI-Key': '4f863cd2cemsh614db9262d0e26cp14f522jsn17af88ad339b',
+    'X-RapidAPI-Host': 'ephemeral-proxies.p.rapidapi.com'
+  }
+}
+
+r = requests.get(**params)
+
+soup = BeautifulSoup(r.text,'html.parser')
