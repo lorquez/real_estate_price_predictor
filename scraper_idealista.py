@@ -1,9 +1,8 @@
 from bs4 import BeautifulSoup
-from latest_user_agents import get_random_user_agent
+import concurrent.futures
 import pandas as pd
 import numpy as np
 import requests
-from requests.exceptions import ProxyError,HTTPError,ConnectTimeout,ConnectionError
 import time
 import json
 import os
@@ -12,178 +11,28 @@ import re
 class idealista_scraper:
 
     def __init__(self, url:str) -> None:
-        self._scraping_var_wait_time = 10 # this will be multiplied for a random percentage
-        self._scraping_fix_wait_time = 5 # this will be added to wait time as is
-        self._IDEALISTA_HOSTNAME = 'https://www.idealista.com'
         self._url = url
-        self.reset_headers()
-
-    def reset_headers(self) -> None:
-        '''
-        Reset the headers to their initial value. Useful after editing them to get around
-        the website anti-scraping protections.
-        '''
-
-        self._headers = {
-            "Host": "www.idealista.com",
-            "User-Agent": "Mozilla/5.0 (X11; Linux x86_64; rv:103.0) Gecko/20100101 Firefox/103.0",
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-            "Accept-Language": "en-US,en;q=0.5",
-            "Accept-Encoding": "gzip, deflate, br",
-            "Connection": "keep-alive",
-            "Upgrade-Insecure-Requests": "1",
-            "Sec-Fetch-Dest": "document",
-            "Sec-Fetch-Mode": "navigate",
-            "Sec-Fetch-Site": "none",
-            "Sec-Fetch-User": "?1",
-            "TE": "trailers"
-        }
-    
-    def _get_free_proxies(self) -> None:
-        '''
-        This function scrapes the free-proxy-list.net website looking for
-        free proxies and puts them in a class property called "proxies"
-        as a list.
-
-        Args:
-        - headers: the user agent needed to avoid 403 error when accessing the free-proxy-list.net website
-
-        '''
-        endpoint = 'https://api.proxyscrape.com/v2/'
-        params = {
-            'request':'displayproxies',
-            'protocol':'http',
-            'timeout':10000,
-            'country':'all', # or gb,es,pt,it,fr,de,nl
-            'ssl':'all',
-            'anonymity':'all'
-        }
-
-        response = requests.get(endpoint,params=params)
-        
-        self.proxies = response.text.split('\r\n')[:-1]
-        print(f'found {len(self.proxies)} proxies')
-
-    def set_wait_time(self, min:int, max:int=0) -> None:
-        '''
-        Set the minimum and maximum amount of time the algoritm has to
-        wait in between requests to the website to avoid having an IP
-        address blacklisted.
-
-        Args:
-        - min: the minimum amount of time
-        - max: the maximum amount of time
-        '''
-        if max != 0 and max < min:
-            print('Specify a max value higher than min or leave it blank')
-            return None
-
-        self._scraping_fix_wait_time = min
-        self._scraping_var_wait_time = max - min
-    
-        if min == max or max == 0:
-            print(f'Wait time set to {min}')
-        else:
-            print(f'Wait time set from {min} to {max}')
-
-    def get_wait_time(self) -> None:
-        '''
-        Prints the current min and max wait time on screen
-        '''
-        min = self._scraping_fix_wait_time
-        max = self._scraping_var_wait_time + min
-        if min == max or max == 0:
-            print(f'Wait time set to {min}')
-        else:
-            print(f'Wait time set from {min} to {max}')
-
-    def wait_time(self) -> None:
-        '''
-        Wrapper for time.sleep function to wait an amount of seconds that
-        is based on the property "scraping_var_wait_time" multiplied
-        for a random number (from 0 to 1) generated with numpy plus the 
-        property "scraping_fix_wait_time". Default config: min 10 sec,
-        max 1 min.
-
-        No arguments
-
-        '''
-        
-        wait_for =  self._scraping_fix_wait_time
-        wait_for += self._scraping_var_wait_time*np.random.rand()
-        print(f'waiting for {wait_for} seconds')
-        time.sleep(wait_for)
-
-    def _proxy_requests_api(self, url:str) -> str:
-        
-        endpoint = ' https://api.scraperapi.com'
-        with open('scraping_apikey','r') as f:
-            params = {
-            'api_key':f.read(),
+        self._IDEALISTA_HOSTNAME = 'https://www.idealista.com'
+        self.api_endpoint = 'http://async.scraperapi.com/jobs'
+        f = open('scraping_apikey','r')
+        self.api_key = f.read()
+        f.close()
+             
+    def _proxy_requests(self, url:str) -> dict:
+        json = {
+            'apiKey':self.api_key,
             'url':url
             }
-
-        response = requests.get(endpoint, params=params)
-        return response
-
-    def _proxy_requests(self, url:str, timeout:int=5) -> requests.models.Response:
-        '''
-        Wrapper for the requests.get funcion. It runs the _get_free_proxies function
-        and rotates through each proxy to complete the request. The proxy list is saved
-        as a class property. Every time the connection to a proxy fails, this function
-        removes that proxy from the proxies' list.
-
-        Args:
-        - timeout (int): how many seconds to wait before throwing TimeoutError (default: 5)
-
-        Returns: the request's response
-
-        '''
-
-        if not hasattr(self,"real_ip"):
-            self.real_ip = True
-
-        if self.real_ip: # do not retry with real IP if it failed already
-            print('First try with real IP')
-            response = requests.get(url,headers=self._headers)
-
-            if response.status_code == 200:
-                return response
-            
-            print('Failed using real IP. Trying with proxies')
-            
-            self.real_ip = False
-
-        # Rotating through proxies  
-        if not hasattr(self,"proxies"): 
-            self._get_free_proxies()
-
-        while (self.proxies): # as long as there are proxies
-            proxy = self.proxies[0]
-            print(f'Trying to connect to {url} from ip {proxy}')
-            dict_proxy = {
-                'http':proxy,
-                'https':proxy
-            }
-            self._headers['User-Agent'] = get_random_user_agent()
-            try:
-                response = requests.get(url, headers=self._headers, proxies=dict_proxy, timeout=timeout)
-                response.raise_for_status()
-                return response
-            except ProxyError:
-                print(f'Connection to proxy {proxy} has failed. Moving to next proxy.')
-            except HTTPError:
-                print(f'Response code: {response.status_code}. Descr: {response.reason}')
-            except:# (TimeoutError,ConnectTimeout,ConnectionError):
-                current_user_agent = self._headers['User-Agent']
-                print(f'Connection failed to {url} using proxy {proxy} and user_agent {current_user_agent}')
-            
-            # if the proxy does not work, removes it
-            self.proxies.remove(proxy)
-            print(f'{len(self.proxies)} proxies left')
-
-        del self.proxies
-
+        
+        response_job = requests.post(self.api_endpoint, json=json)
+        for _ in range(10):
+            if requests.get(url = response_job.json()['statusUrl']).json()['status'] == "finished":
+                break        
+            time.sleep(5)
+        
+        response = requests.get(url = response_job.json()['statusUrl'])
+        return response.json()['response']
+        
     def _links_from_breadcrumb(self, thisUrl:str) -> list:
         '''
         Gets an area url as input and returns a list of links for all 
@@ -197,10 +46,11 @@ class idealista_scraper:
 
         '''
         
-
         print(f'starting from {thisUrl}')
         response = self._proxy_requests(thisUrl)
-        soup = BeautifulSoup(response.text,'lxml')
+        if response['statusCode'] != 200:
+            raise f'Could not retrieve data for {thisUrl}'
+        soup = BeautifulSoup(response['body'],'html.parser')
         
         current_level_links = [x for x in soup.select('li.breadcrumb-dropdown-element.highlighted a')]
         current_level_house_numbers = [int(x.text.replace('.','')) for x in soup.select('li.breadcrumb-dropdown-element.highlighted .breadcrumb-navigation-sidenote') if x.text]
@@ -216,7 +66,6 @@ class idealista_scraper:
         
         # Recursively searching through areas with more than 1.800 houses
         for area,_ in more_than_1800_houses:
-            self.wait_time()
             area_url = self._IDEALISTA_HOSTNAME+area.get('href')
             print(f'recursion over: {area_url}')
             areas = self._links_from_breadcrumb(area_url)
@@ -238,7 +87,7 @@ class idealista_scraper:
         self.areas_df = self.areas_df.reset_index().drop('index',axis=1)
         self.areas_df['page'] = 1
         self.areas_df['done'] = False
-        self.areas_df.to_csv('./areas_df.csv', index=False)
+        self.areas_df.to_csv('../areas_df.csv', index=False)
 
     def generate_properties_links_df(self) -> None:
         '''
@@ -253,115 +102,170 @@ class idealista_scraper:
         if not hasattr(self,'areas_df'):
             try:
                 print(f'No areas_df dataframe. Try to read from CSV.')
-                self.areas_df = pd.read_csv('./areas_df.csv')
+                self.areas_df = pd.read_csv('../areas_df.csv')
             except:
                 raise 'Please run get_areas_df first'
             
-            print('areas_df found.')
+        
+        print(f'Areas found: {self.areas_df.shape[0]}')
         
         
-        for area in self.areas_df[self.areas_df['done']==False].itertuples():
-            path = f'{self._IDEALISTA_HOSTNAME}{area.area_url}pagina-{str(area.page)}.htm?ordenado-por=fecha-publicacion-asc'
-            print(f'Getting properties\' url for {area.area_name}')
-            page = int(area.page)
+        with concurrent.futures.ProcessPoolExecutor() as executor:
+            executor.map(
+                self._generate_single_area_property_links,
+                self.areas_df[self.areas_df['done']==False].iterrows()
+                )
+            
 
-            while True:
-                print(f'Path is {path}')
-                response = self._proxy_requests(path)
-                if response.status_code != 200:
-                    raise f"Cannot retrieve data for page {page} of {area.area_name}"
-                soup = BeautifulSoup(response.text,'lxml')
-                
-                # extracting links from page and creating a 3 columns df
-                thisPageLinks = [[area.area_name,self._IDEALISTA_HOSTNAME+x.get('href'),False] for x in soup.select('a.item-link')]
-                thisPageLinks_df = pd.DataFrame(thisPageLinks, columns=['area_name','property_link','done'])
+        self.properties_links_df = pd.read_csv('../properties_links_df.csv')
 
-                # create or concat data to properties_links_df
-                if hasattr(self,'properties_links_df'):
-                    self.properties_links_df = pd.concat([self.properties_links_df, thisPageLinks_df])
-                else:
-                    try:
-                        self.properties_links_df = pd.concat(pd.read_csv('./properties_links_df.csv'),thisPageLinks_df)
-                    except:
-                        self.properties_links_df = thisPageLinks_df.copy()
-                
-                header = not os.path.exists('./properties_links_df.csv')
-                thisPageLinks_df.to_csv('./properties_links_df.csv', mode='a', index=False, header=header)
+    def _generate_single_area_property_links(self, area) -> None:
+        '''
+        Used do retrieve the properties' links for a specific area using parallel processing
+        
+        '''
 
-                print(f'Page {page}: property links added')
-                print(f'properties_links_df now has {len(self.properties_links_df)} links')
+        page = int(area['page'])
+        path = f"{self._IDEALISTA_HOSTNAME}{area['area_url']}pagina-{str(page)}.htm?ordenado-por=fecha-publicacion-asc"
+        print(f"Getting properties\' url for {area['area_name']}")
 
-                # if there is a next page
-                next_page = soup.select_one('.pagination .next a')
-                if bool(next_page):
-                    # done with this page
-                    self._headers['Referrer'] = path
-                    path = self._IDEALISTA_HOSTNAME+next_page.get('href')
-                    # storing next page on areas_df in case this breaks
-                    page += 1
-                    self.areas_df.at[area.Index,"page"] = page
-                    print(f'Next page: {path}, which is number {page}')
-                    self.areas_df.to_csv('./areas_df.csv', index=False)
-                else:
-                    # done with this area
-                    self.areas_df.at[area.Index,"done"] = True
-                    print(f'all properties\' links from {area.area_name} have been extracted')
-                    break
-                
-                self.wait_time()
+        while True:
+            print(f'Path is {path}')
+            response = self._proxy_requests(path)
+            if response['statusCode'] != 200:
+                raise f"Cannot retrieve data for page {page} of {area['area_name']}"
+            soup = BeautifulSoup(response['body'],'html.parser')
+            
+            # extracting links from page and creating a 3 columns df
+            thisPageLinks = [[area['area_name'],self._IDEALISTA_HOSTNAME+x.get('href'),False] for x in soup.select('a.item-link')]
+            thisPageLinks_df = pd.DataFrame(thisPageLinks, columns=['area_name','property_link','done'])
 
-            self.properties_links_df = pd.read_csv('./properties_links_df.csv')
+            # create or concat data to properties_links_df
+            if hasattr(self,'properties_links_df'):
+                self.properties_links_df = pd.concat([self.properties_links_df, thisPageLinks_df])
+            else:
+                try:
+                    self.properties_links_df = pd.concat(pd.read_csv('../properties_links_df.csv'),thisPageLinks_df)
+                except:
+                    self.properties_links_df = thisPageLinks_df.copy()
+            
+            header = not os.path.exists('../properties_links_df.csv')
+            thisPageLinks_df.to_csv('../properties_links_df.csv', mode='a', index=False, header=header)
+
+            print(f'Page {page}: property links added')
+            print(f'properties_links_df now has {len(self.properties_links_df)} links')
+
+            # if there is a next page
+            next_page = soup.select_one('.pagination .next a')
+            if bool(next_page):
+                # done with this page
+                self._headers['Referrer'] = path
+                path = self._IDEALISTA_HOSTNAME+next_page.get('href')
+                # storing next page on areas_df in case this breaks
+                page += 1
+                self.areas_df.at[area.Index,"page"] = page
+                print(f'Next page: {path}, which is number {page}')
+                self.areas_df.to_csv('../areas_df.csv', index=False)
+            else:
+                # done with this area
+                self.areas_df.at[area.Index,"done"] = True
+                print(f"all properties\' links from {area['area_name']} have been extracted")
+                break  
 
     def get_properties_data(self) -> None:
         '''
         Has to run after generate_properties_links_df. It takes the properties links, 
-        access them and get properties data out of them. It creates a new class 
-        property "dataset"
+        access them and dump the html as text files locally.
 
         '''
 
         if not hasattr(self,'properties_links_df'):
             try:
-                self.properties_links_df = pd.read_csv('./properties_links_df.csv')
+                self.properties_links_df = pd.read_csv('../properties_links_df.csv')
             except:
                 raise 'Cannot find properties\' links'
 
         print(f'Properties\' links found: {self.properties_links_df.shape[0]}.')
 
-        for row in self.properties_links_df[self.properties_links_df['done']==False].itertuples():
-            self._get_single_property_data(row)
+        with concurrent.futures.ProcessPoolExecutor(max_workers=10) as executor:
+            executor.map(
+                self._dump_single_property_data,
+                self.properties_links_df[self.properties_links_df['done']==False].iterrows()
+                )
 
-    def _get_single_property_data(self,row) -> None:
-        print(row)
+    def _dump_single_property_data(self,row) -> None:
+        property_id = row['property_link'].split('/')[-2]
+        print(f"{property_id}: retrieving data")
         response = self._proxy_requests(row.property_link)
-        if response.status_code == 404:
-            print(f'Property not found {row.property_link}')
+        if response['statusCode'] == 404:
+            print(f'{property_id}: property not found {row.property_link}')
             self.properties_links_df = self.properties_links_df.drop(row.Index)
-            self.properties_links_df.to_csv('./properties_links_df.csv',index=False)
-            return None
+            self.properties_links_df.to_csv('../properties_links_df.csv',index=False)
+            return None        
 
-        soup = BeautifulSoup(response.text,'html.parser')
+        with open(f'../properties/{property_id}','w') as f:
+            f.write(response['body'])
         
-        print(f'Soup parsed for {row.property_link}')
+        self.properties_links_df.at[row.Index,'done'] = True
+        self.properties_links_df.to_csv('../properties_links_df.csv',index=False)
+
+        print(f'Property {row.Index+1} of {self.properties_links_df.shape[0]} dumped')
+
+    def create_dataset(self) -> None:
+        '''
+        Access the dumped html code saved as text files for all the properties and
+        retrieve the properties' features from them. It creates a new class property "dataset"
+
+        '''
+        dumped_data_files = os.listdir('../properties')
+        if not hasattr(self,'properties_links_df'):
+            try:
+                self.properties_links_df = pd.read_csv('../properties_links_df.csv')
+            except:
+                print('WARNING: Could not find properties_links_df.')
+
+        # if dataset exists then this is an update so skip the files already processed
+        if hasattr(self,'dataset'):
+            dumped_data_files = [x for x in dumped_data_files if not (self.dataset['id']==x).any()]
+
+        with concurrent.futures.ProcessPoolExecutor() as executor:
+            executor.map(self._get_single_property_data,dumped_data_files)
+
+        self.dataset = pd.read_csv('../idealista_dataset.csv')
+
+    def _get_single_property_data(self,prop_dumped_data_file_name) -> None:
+        '''
+        Used do retrieve single property data with parallel processing
+
+        '''
+        property_id = prop_dumped_data_file_name
+
+        with open(f'../properties/{property_id}','r') as f:
+            soup = BeautifulSoup(f.read(),'html.parser')
+
+        print(f'{property_id}: soup parsed')
 
         if soup.select('#notFoundWithSuggestions'):
-            print(f'This property has been removed')
-            self.properties_links_df = self.properties_links_df.drop(row.Index)
-            self.properties_links_df.to_csv('./properties_links_df.csv',index=False)
+            print(f'{property_id}: this property has been removed')
+            try:
+                row_to_remove = self.properties_links_df[self.properties_links_df['property_link'].str.contains(property_id)]
+                self.properties_links_df = self.properties_links_df.drop(row_to_remove.Index)
+                self.properties_links_df.to_csv('../properties_links_df.csv',index=False)
+            except:
+                pass
             return None
-        
+
         try:
             utag_script = list(filter(lambda x: 'utag_data' in x.get_text(),soup.select('script')))[0]
             utag_data = json.loads(str(utag_script).split(';')[0].split(' ')[7])
         except:
-            print(f'Cannot retrieve data for {row.property_link}')
+            print(f'{property_id}: cannot retrieve data')
             return None
         property_data = {
             'id':utag_data['ad']['id'],
             'propertyType':soup.select_one('.main-info .typology').text.strip().lower(),
             'title':soup.select_one('.main-info .txt-body').text.strip().lower(),
             'locationId':utag_data['ad']['address']['locationId'],
-            'link':row.property_link,
             'price':utag_data['ad']['price'],
             'size':utag_data['ad']['characteristics']['constructedArea'],
             'hasParking':utag_data['ad']['characteristics'].get('hasParking',0), # if not exist, get 0
@@ -400,25 +304,10 @@ class idealista_scraper:
             property_data['floor'] = property_data['interiorExterior'] = "does not apply"
         
         property_data_df = pd.DataFrame.from_dict(property_data,orient='index').T
-        print(f'Data converted to DF for {row.property_link}')
-            
-        # create or concat data to idealista_dataset
-        if hasattr(self,'dataset'):
-            self.dataset = pd.concat([self.dataset, property_data_df])
-        else:
-            try:
-                self.dataset = pd.concat(pd.read_csv('./idealista_dataset.csv'), property_data_df)
-            except:
-                self.dataset = property_data_df.copy()
+        print(f'{property_id}: data converted to DF')
 
-        header = not os.path.exists('./idealista_dataset.csv')
-        property_data_df.to_csv('./idealista_dataset.csv', mode='a', index=False, header=header)
-
-
-        self.properties_links_df.at[row.Index,'done'] = True
-        self.properties_links_df.to_csv('./properties_links_df.csv',index=False)
-
-        print(f'Property {row.Index+1} of {self.properties_links_df.shape[0]} done')
+        header = not os.path.exists('../idealista_dataset.csv')
+        property_data_df.to_csv('../idealista_dataset.csv', mode='a', index=False, header=header)
 
     def get_location_ids_mapper(self) -> dict:
         '''
@@ -429,15 +318,33 @@ class idealista_scraper:
 
         '''
         
-        response = self._proxy_requests(self._url)
-        response.raise_for_status()
-        soup = BeautifulSoup(response.text,'html.parser')
+        if os.path.exists('../location_ids.json'):
+            with open('../location_ids.json','r') as f:
+                location_ids_mapper = dict(f.read())
+        else:
+            response = self._proxy_requests(self._url)
+            if response['statusCode'] != 200:
+                raise f'Could not retrieve the location mapper'
+            soup = BeautifulSoup(response['body'],'html.parser')
 
-        locations_list = [(x.get('data-location-id'),x.select_one('a').get_text()) for x in soup.select('.breadcrumb-dropdown-subitem-element-list')]
+            locations_list = [(x.get('data-location-id'),x.select_one('a').get_text()) for x in soup.select('.breadcrumb-dropdown-subitem-element-list')]
 
-        self.location_ids_mapper = {key:value for key,value in locations_list}
+            location_ids_mapper = {key:value for key,value in locations_list}
+
+            with open('../location_ids.json','w') as f:
+                f.write(json.dumps(location_ids_mapper))
+
+        return location_ids_mapper
 
     def full_scrape(self) -> None:
+        '''
+        Runs a full scrape of idelista properties. Firstly it will run get_areas_df(),
+        then generate_properties_links_df() and get_properties_data(). It will then complete
+        the dataset by running the get_location_ids_mapper() and applying the mapper to the 
+        dataset. Finally, it will export the dataset calling the file "idealista_dataset.csv"
+
+        Receives no arguments and returns None
+        '''
         self.get_areas_df()
         
         print('Found '+self.areas_df['n_houses'].sum()+' houses')
@@ -448,23 +355,23 @@ class idealista_scraper:
 
         self.get_properties_data()
 
-        self.get_location_ids_mapper()
-        self.dataset['area_name'] = self.dataset['locationId'].map(self.location_ids_mapper)
+        mapper = self.get_location_ids_mapper()
+        self.dataset['locationId'] = self.dataset['locationId'].apply(lambda x: "-".join(x.split("-")[:8]))
+        self.dataset['area_name'] = self.dataset['locationId'].map(mapper)
+
+        self.dataset.to_csv('../idealista_dataset.csv')
+
 
 
 url = 'https://www.idealista.com/venta-viviendas/madrid-madrid/'
 scraper = idealista_scraper(url)
 
-scraper.get_properties_data()
-
 scraper.full_scrape()
 
 idealista_dataset = scraper.dataset.copy()
 
-scraper.get_location_ids_mapper()
-
 idealista_dataset['locationId'] = idealista_dataset['locationId'].apply(lambda x: "-".join(x.split("-")[:8]))
-idealista_dataset['area_name'] = idealista_dataset['locationId'].map(scraper.location_ids_mapper)
+idealista_dataset['area_name'] = idealista_dataset['locationId'].map(mapper)
 idealista_dataset['price_m2'] = (idealista_dataset['price'] / idealista_dataset['size']).round(2)
 
 # Idealista often suffer from fraudolent announces so it's better to aggregate 
@@ -472,21 +379,143 @@ idealista_dataset['price_m2'] = (idealista_dataset['price'] / idealista_dataset[
 price_m2_per_area = idealista_dataset[['area_name','price_m2']].groupby(['area_name']).median().reset_index()
 price_m2_per_area = {key:value for key,value in price_m2_per_area.values}
 
-idealista_dataset['area_price'] = idealista_dataset['area_name'].map(price_m2_per_area).astype(float)
+idealista_dataset['area_price'] = idealista_dataset['area_name'].map(price_m2_per_area).astype(float).round(2)
 
 
-thisUrl = 'https://www.idealista.com/inmueble/98450654/'
-scraper._headers['Referrer'] = 'https://www.idealista.com/venta-viviendas/madrid/villaverde/los-angeles/'
-r = requests.get(f'{thisUrl}',headers=scraper._headers)
 
-params = {
-  'url': 'https://ephemeral-proxies.p.rapidapi.com/v1/proxy',
-  'headers': {
-    'X-RapidAPI-Key': '4f863cd2cemsh614db9262d0e26cp14f522jsn17af88ad339b',
-    'X-RapidAPI-Host': 'ephemeral-proxies.p.rapidapi.com'
-  }
-}
 
-r = requests.get(**params)
 
-soup = BeautifulSoup(r.text,'html.parser')
+import requests
+import pandas as pd
+import time
+import concurrent.futures
+
+df = pd.read_csv('../properties_links_df.csv')
+
+proxies = {
+        "http": "http://065fa1de2a6e43a084d3dcbdb652f8a2:@proxy.crawlera.com:8011/",
+        "https": "http://065fa1de2a6e43a084d3dcbdb652f8a2:@proxy.crawlera.com:8011/"
+        }
+
+def get_data(url):
+    property_id = url.split('/')[-2]
+    print(f'{property_id} start')
+    while True:
+        response = requests.get(
+            url,
+            proxies=proxies,
+            verify='../zyte-proxy-ca.crt' 
+        )
+        if response.text != 'All download attempts failed. Please retry.':
+            print(f'{property_id} attempt succeded')
+            break
+
+        print(f'{property_id} attempt failed')
+        time.sleep(2)
+
+
+    file = open('../properties/'+property_id,'w')
+    file.write(response.text)
+    file.close()
+    print(f'{property_id} done')
+    return 'done'
+
+
+
+with concurrent.futures.ProcessPoolExecutor(max_workers=10) as executor:
+    results = executor.map(get_data,list(df[df['done']==False][:10000]['property_link'].values))
+
+list(results)
+
+########################################
+
+import os
+import pandas as pd
+
+properties_already_downloaded = os.listdir('../properties/')
+start_url = 'https://www.idealista.com/venta-viviendas/madrid-madrid/?ordenado-por=fecha-publicacion-desc'
+downloaded = os.listdir('../properties')
+
+def generate_properties_links_df(url) -> None:
+    
+    path = url
+    page = 1
+    while True:
+        print(f'Path is {path}')
+        response_job = scraper._proxy_requests(path)
+        while requests.get(url = response_job.json()['statusUrl']).json()['status'] != "finished":
+            print(f'Job not ready')
+            time.sleep(5)
+        response = requests.get(url = response_job.json()['statusUrl'])
+        if response.status_code != 200:
+            raise f"Cannot retrieve data"
+        soup = BeautifulSoup(json.loads(response.text)['response']['body'],'lxml')
+        print(response.content)
+        
+        # extracting links from page and creating a 3 columns df
+        thisPageLinks = []
+        for link in soup.select('a.item-link'):
+            link_url = link.get('href')
+            if link_url.split('/')[-2] in downloaded:
+                break
+            
+            thisPageLinks.append(['madrid_recent',scraper._IDEALISTA_HOSTNAME+link_url,False])
+
+        thisPageLinks_df = pd.DataFrame(thisPageLinks, columns=['area_name','property_link','done'])
+        print(f'thisPageLinks_df: {thisPageLinks_df}')
+
+        header = not os.path.exists('../properties_links_df.csv')
+        thisPageLinks_df.to_csv('../properties_links_df.csv', mode='a', index=False, header=header)
+
+        print(f'Page {page}: property links added')
+
+        if len(thisPageLinks)<30:
+            print('Done extracting new properties')
+            return None
+
+        # if there is a next page
+        next_page = soup.select_one('.pagination .next a')
+        if bool(next_page):
+            # done with this page
+            path = scraper._IDEALISTA_HOSTNAME+next_page.get('href')
+            # storing next page on areas_df in case this breaks
+            page += 1
+            print(f'Next page: {path}, which is number {page}')
+        else:
+            # done with this area
+            print(f'all properties\' links have been extracted')
+            break
+
+def get_data_proxy(url):
+
+    property_id = url.split('/')[-2]
+    print(f'{property_id} start')
+    
+    for _ in range(10):
+        response_job = scraper._proxy_requests(url)
+        print(f'{property_id} job submitted')
+
+        while requests.get(url = response_job.json()['statusUrl']).json()['status'] != "finished":
+            print(f'{property_id} job not ready')
+            time.sleep(5)
+        
+        response = requests.get(url = response_job.json()['statusUrl'])
+        if response.status_code==200:
+            print(f'{property_id} job ready with code 200')
+            file = open('../properties/'+property_id,'w')
+            file.write(str(json.loads(response.text)['response']['body']))
+            file.close()
+            break
+        print(f'{property_id} job returned an error.')
+
+df = pd.read_csv('../properties_links_df.csv')
+
+generate_properties_links_df(start_url)
+
+with concurrent.futures.ProcessPoolExecutor(max_workers=5) as executor:
+    executor.map(get_data_proxy,list(df[df['done']==False]['property_link'].values))
+
+df['done'] = df['property_link'].apply(lambda x: x.split('/')[-2] in downloaded)
+
+df.to_csv('../properties_links_df.csv',index=False)
+
