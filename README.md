@@ -6,7 +6,7 @@ This is the final project for the Kschoool Master in Data Science (4th ed), and 
 
 This project comes with the objective of knowing the ideal market prices of second-hand homes in the municipality of Madrid. To do so, the model analyzes a dataset of real estate properties. Given a specific set of property's characteristics, the model is able to estimate its ideal price range.
 
-![Streamlit front-end](https://github.com/lorquez/real_estate_price_predictor/blob/main/raw_data/TFM_frontend.jpg)
+![Streamlit front-end](https://github.com/lorquez/real_estate_price_predictor/blob/main/raw_data/TFM_frontend.jpeg)
 
 ## Project Overview
 
@@ -49,7 +49,7 @@ Finally upload the data as metioned above.
 Data can be obtained by running the two notebooks in the "/scr/0. Scraping/" folder. To run the "0. Fotocasa Scraping (Jupyter Notebook).ipynb" you have to download the notebook on your local machine and simply run the cells in order. After data is obtained, run the notebooks in the "/src/" from 1 to 6 in order to execute the project.
 Access this url to see the final Streamlit: https://realestate-prediction.herokuapp.com/
 
-## Author
+## Authors
 
 In alphabetic order:
 - Alessandro cosci (alick888@gmail.com)
