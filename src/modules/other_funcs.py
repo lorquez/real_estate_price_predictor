@@ -5,6 +5,12 @@ from bs4 import BeautifulSoup
 import re
 
 def fotocasa_m2_scraping(df):
+  '''
+  Function that scrapes Fotocasa to extract the average price and price per square metre of each district.
+  ----------
+  df: dataframe to which the data extracted from Fotocasa will be added.
+  return df_with_pricem2: dataframe with the columns added.
+  '''
   headers = {'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_10_1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/39.0.2171.95 Safari/537.36'}
   r = requests.get('https://www.fotocasa.es/indice-precio-vivienda/madrid-capital/todas-las-zonas', headers=headers)
   soup = BeautifulSoup(r.content, 'html.parser')
@@ -47,6 +53,13 @@ def fotocasa_m2_scraping(df):
 
 #-------------------------------------------
 def iqr_outliers(df, features=['']):
+  '''
+  Function that applies the IQR method of outlier cleaning to the specified feature of the dataframe.
+  ----------
+  df: dataframe on which the function shall be applied
+  features: list of features of the dataframe
+  return df: returns the dataframe without the records that do not comply with the extremes established by the method.
+  '''
   try:
     for feature in features:
       q1 = np.percentile(df[feature],25,interpolation='midpoint')

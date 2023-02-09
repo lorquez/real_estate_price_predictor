@@ -9,6 +9,12 @@ import pyproj
 #---------------------------------------------------------------
 
 def plot_correlation_matrix(df,mask=False):
+  '''
+  Function that plots the Pearson correlation matrix
+  ---------
+  df: dataframe on which the function is applied
+  mask: if set to true draws only the lower triangle of the matrix
+  '''
   fig, ax = plt.subplots(1,1,figsize=(20,10))
   ax.set_title('Correlation matrix',fontsize=22)
   corr = df.corr()
@@ -30,6 +36,14 @@ def plot_feature_correlation_matrix(df,feature):
 
 
 def regplot_correlations(df,feature1='price',feature2='',hue='district'):
+  '''
+  Function that draws all correlations of a dataframe, either together or separately.
+  ---------
+  df: dataframe on which the function is to be applied
+  feature1: feature to be correlated
+  feature1: second feature to correlate. If left empty, all correlations will be drawn.
+  hue: feature by which the graph is to be differentiated chromatically
+  '''
   if (feature1 == 'price') & (feature2 == ''):
     corr_indexes=df.corrwith(df[feature1]).sort_values(ascending=False).index
     fig = plt.figure(figsize=(15,30))  
@@ -57,6 +71,12 @@ def regplot_correlations(df,feature1='price',feature2='',hue='district'):
   #---------------------------------------------------------------
 
 def plot_choropletic_map(df,feature=''):
+  '''
+  Function that draws interactive choropleth maps
+  ----------
+  df: dataframe from which the information is extracted
+  feature: feature that draws the map. Only values like id, size and price are allowed.
+  '''
   mapa_distritos = '/content/drive/MyDrive/Kschool_TFM/raw_data/mapa_madrid/Distritos_20210712.shp'
   gpd_madrid = gpd.read_file(mapa_distritos)
   gpd_madrid.to_crs(pyproj.CRS.from_epsg(4326), inplace=True)

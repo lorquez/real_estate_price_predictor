@@ -1,0 +1,13 @@
+pandas
+category_encoders
+catboost
+lightgbm
+sklearn
+shap
+statsmodels
+xgboost
+matplotlib
+seaborn
+geopandas
+plotly
+pyproj
