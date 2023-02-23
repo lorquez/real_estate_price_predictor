@@ -6,8 +6,6 @@ This is the final project for the Kschoool Master in Data Science (4th ed), and 
 
 This project comes with the objective of knowing the ideal market prices of second-hand homes in the municipality of Madrid. To do so, the model analyzes a dataset of real estate properties. Given a specific set of property's characteristics, the model is able to estimate its ideal price range.
 
-![Streamlit front-end](https://github.com/lorquez/real_estate_price_predictor/blob/main/raw_data/TFM_frontend.jpeg)
-
 ## Project Overview
 
 The project consists of the following steps (one per each notebook):
